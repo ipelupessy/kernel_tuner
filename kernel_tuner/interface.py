@@ -120,7 +120,10 @@ limitations under the License.
 
 import numpy
 import itertools
+import subprocess
 from collections import OrderedDict
+from noodles import schedule_hint, gather, run_logging
+from noodles.display import SimpleDisplay
 
 from kernel_tuner.cuda import CudaFunctions
 from kernel_tuner.opencl import OpenCLFunctions
@@ -231,7 +234,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     """
 
     original_kernel = kernel_string
-    results = dict()
+    results = []
 
     lang = _detect_language(lang, original_kernel)
     dev = _get_device_interface(lang, device)
@@ -277,44 +280,21 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         name = kernel_name + "_" + instance_string
         kernel_string = kernel_string.replace(kernel_name, name)
 
-        #compile kernel func
-        try:
-            func = dev.compile(name, kernel_string)
-        except Exception as e:
-            #compiles may fail because certain kernel configurations use too
-            #much shared memory for example, the desired behavior is to simply
-            #skip over this configuration and try the next one
-            if "uses too much shared data" in str(e):
-                if verbose:
-                    print("skipping config", instance_string, "reason: too much shared memory used")
-                continue
-            else:
-                raise e
-
-        #add constant memory arguments to compiled module
-        if cmem_args is not None:
-            dev.copy_constant_memory_args(cmem_args)
-
-        #test kernel
-        try:
-            time = dev.benchmark(func, gpu_args, threads, grid)
-        except Exception as e:
-            #some launches may fail because too many registers are required
-            #to run the kernel given the current thread block size
-            #the desired behavior is to simply skip over this configuration
-            #and proceed to try the next one
-            if "too many resources requested for launch" in str(e):
-                if verbose:
-                    print("skipping config", instance_string, "reason: too many resources requested for launch")
-                continue
-            else:
-                print("Error while benchmarking:", instance_string)
-                raise e
+        time = _compile_and_run(dev, name, kernel_string, instance_string, verbose, cmem_args, gpu_args, threads, grid)
 
         #print the result
-        print(params, kernel_name, "took:", time, " ms.")
-        results[instance_string] = time
+        #print(params, kernel_name, "took:", time, " ms.")
+        if time is not None:
+            results.append(time)
 
+    workflow = gather(*results)
+
+    print("╭─(Running benchmarks...)")
+    with SimpleDisplay(error_filter) as display:
+        answer = run_logging(workflow, 1, display)
+
+
+    results = dict(answer)
     #finished iterating over search space
     if len(results) > 0:
         best_config = min(results, key=results.get)
@@ -322,10 +302,56 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     else:
         print("no results to report")
 
-    return results
+    return answer
 
 
 #module private functions
+@schedule_hint(display="│   Testing {instance_string} ... ",
+               confirm=True)
+def _compile_and_run(dev, name, kernel_string, instance_string, verbose, cmem_args, gpu_args, threads, grid):
+    # compile kernel func
+    try:
+        func = dev.compile(name, kernel_string)
+    except Exception as e:
+        # compiles may fail because certain kernel configurations use too
+        # much shared memory for example, the desired behavior is to simply
+        # skip over this configuration and try the next one
+        if "uses too much shared data" in str(e):
+            if verbose:
+                print("skipping config", instance_string, "reason: too much shared memory used")
+            return None
+        else:
+            raise e
+
+    # add constant memory arguments to compiled module
+    if cmem_args is not None:
+        dev.copy_constant_memory_args(cmem_args)
+
+    # test kernel
+    try:
+        time = dev.benchmark(func, gpu_args, threads, grid)
+    except Exception as e:
+        # some launches may fail because too many registers are required
+        # to run the kernel given the current thread block size
+        # the desired behavior is to simply skip over this configuration
+        # and proceed to try the next one
+        if "too many resources requested for launch" in str(e):
+            if verbose:
+                print("skipping config", instance_string, "reason: too many resources requested for launch")
+            return None
+        else:
+            print("Error while benchmarking:", instance_string)
+            raise e
+
+    return time, instance_string
+
+
+def error_filter(xcptn):
+    if isinstance(xcptn, subprocess.CalledProcessError):
+        return xcptn.stderr
+    else:
+        return None
+
 
 def _detect_language(lang, original_kernel):
     """attempt to detect language from the kernel_string if not specified"""
