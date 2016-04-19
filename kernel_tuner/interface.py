@@ -242,9 +242,6 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     #inspect device properties
     max_threads = dev.max_threads
 
-    #move data to GPU
-    gpu_args = dev.create_gpu_args(arguments)
-
     #compute cartesian product of all tunable parameters
     parameter_space = list(itertools.product(*tune_params.values()))
 
@@ -280,7 +277,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         name = kernel_name + "_" + instance_string
         kernel_string = kernel_string.replace(kernel_name, name)
 
-        time = _compile_and_run(dev, name, kernel_string, instance_string, verbose, cmem_args, gpu_args, threads, grid)
+        time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid)
 
         #print the result
         #print(params, kernel_name, "took:", time, " ms.")
@@ -308,7 +305,13 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 #module private functions
 @schedule_hint(display="│   Testing {instance_string} ... ",
                confirm=True)
-def _compile_and_run(dev, name, kernel_string, instance_string, verbose, cmem_args, gpu_args, threads, grid):
+def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid):
+    dev = _get_device_interface(lang, device)
+
+    # move data to GPU
+    gpu_args = dev.create_gpu_args(arguments)
+
+
     # compile kernel func
     try:
         func = dev.compile(name, kernel_string)
