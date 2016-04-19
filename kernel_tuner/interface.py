@@ -251,9 +251,9 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         instance_string = "_".join([str(i) for i in params.values()])
         try:
             _check_restrictions(restrictions, params)
-        except Exception, e:
+        except Exception as e:
             if verbose:
-                print "skipping config", instance_string, "reason:", str(e)
+                print("skipping config", instance_string, "reason:", str(e))
             parameter_space.remove(element)
 
     #iterate over parameter space
@@ -265,7 +265,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         threads = _get_thread_block_dimensions(params)
         if numpy.prod(threads) > max_threads:
             if verbose:
-                print "skipping config", instance_string, "reason: too many threads per block"
+                print("skipping config", instance_string, "reason: too many threads per block")
             continue
         grid = _get_grid_dimensions(problem_size, params,
                        grid_div_y, grid_div_x)
@@ -280,13 +280,13 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         #compile kernel func
         try:
             func = dev.compile(name, kernel_string)
-        except Exception, e:
+        except Exception as e:
             #compiles may fail because certain kernel configurations use too
             #much shared memory for example, the desired behavior is to simply
             #skip over this configuration and try the next one
             if "uses too much shared data" in str(e):
                 if verbose:
-                    print "skipping config", instance_string, "reason: too much shared memory used"
+                    print("skipping config", instance_string, "reason: too much shared memory used")
                 continue
             else:
                 raise e
@@ -298,29 +298,29 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         #test kernel
         try:
             time = dev.benchmark(func, gpu_args, threads, grid)
-        except Exception, e:
+        except Exception as e:
             #some launches may fail because too many registers are required
             #to run the kernel given the current thread block size
             #the desired behavior is to simply skip over this configuration
             #and proceed to try the next one
             if "too many resources requested for launch" in str(e):
                 if verbose:
-                    print "skipping config", instance_string, "reason: too many resources requested for launch"
+                    print("skipping config", instance_string, "reason: too many resources requested for launch")
                 continue
             else:
-                print "Error while benchmarking:", instance_string
+                print("Error while benchmarking:", instance_string)
                 raise e
 
         #print the result
-        print params, kernel_name, "took:", time, " ms."
+        print(params, kernel_name, "took:", time, " ms.")
         results[instance_string] = time
 
     #finished iterating over search space
     if len(results) > 0:
         best_config = min(results, key=results.get)
-        print "best performing configuration: ", best_config, "took:", results[best_config], "ms."
+        print("best performing configuration: ", best_config, "took:", results[best_config], "ms.")
     else:
-        print "no results to report"
+        print("no results to report")
 
     return results
 
@@ -362,7 +362,7 @@ def _get_thread_block_dimensions(params):
 def _prepare_kernel_string(original_kernel, params):
     """replace occurrences of the tuning params with their current value"""
     kernel_string = original_kernel
-    for k, v in params.iteritems():
+    for k, v in params.items():
         kernel_string = kernel_string.replace(k, str(v))
     return kernel_string
 
