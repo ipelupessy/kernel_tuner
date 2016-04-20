@@ -121,18 +121,23 @@ limitations under the License.
 from __future__ import print_function
 
 import numpy
+import sys
 import itertools
 import subprocess
+
+import pycuda
+
 from collections import OrderedDict
-from noodles import schedule_hint, gather, run_logging
+from noodles import schedule_hint, gather, run_logging, run_process, serial, Storable
 from noodles.display import SimpleDisplay
+
 
 from kernel_tuner.cuda import CudaFunctions
 from kernel_tuner.opencl import OpenCLFunctions
 
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         tune_params, device=0, grid_div_x=None, grid_div_y=None,
-        restrictions=None, verbose=False, lang=None, cmem_args=None):
+        restrictions=None, verbose=False, lang=None, cmem_args=None, num_threads=1):
     """ Tune a CUDA kernel given a set of tunable parameters
 
     :param kernel_name: The name of the kernel in the code
@@ -230,6 +235,9 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         objects in the same way as normal kernel arguments.
     :type cmem_args: dict(string, ...)
 
+    :param num_threads: The number of noodles threads to use
+    :type num_threads: int
+
     :returns: A dictionary of all executed kernel configurations and their
         execution times.
     :rtype: dict( string, float )
@@ -290,7 +298,12 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 
     print("╭─(Running benchmarks...)")
     with SimpleDisplay(error_filter) as display:
-        answer = run_logging(workflow, 1, display)
+        answer = run_logging(workflow, num_threads, display)
+
+    #answer = run_process(workflow, 8, my_registry)
+
+    #print("Answer: ", answer)
+    answer = filter(None, answer)
 
     results = dict(answer)
     #finished iterating over search space
@@ -304,6 +317,9 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 
 
 #module private functions
+def my_registry():
+    return serial.base() + serial.numpy()
+
 @schedule_hint(display="│   Testing {instance_string} ... ",
                confirm=True)
 def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid):
@@ -320,9 +336,10 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
         # compiles may fail because certain kernel configurations use too
         # much shared memory for example, the desired behavior is to simply
         # skip over this configuration and try the next one
+        dev.cleanup_gpu_args(gpu_args)
         if "uses too much shared data" in str(e):
             if verbose:
-                print("skipping config", instance_string, "reason: too much shared memory used")
+                print("skipping config", instance_string, "reason: too much shared memory used", file=sys.stderr)
             return None
         else:
             raise e
@@ -341,18 +358,22 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
         # and proceed to try the next one
         if "too many resources requested for launch" in str(e):
             if verbose:
-                print("skipping config", instance_string, "reason: too many resources requested for launch")
+                print("skipping config", instance_string, "reason: too many resources requested for launch", file=sys.stderr)
             return None
         else:
-            print("Error while benchmarking:", instance_string)
+            print("Error while benchmarking:", instance_string, file=sys.stderr)
             raise e
+    finally:
+        dev.cleanup_gpu_args(gpu_args)
 
-    return time, instance_string
+    return instance_string, time
 
 
 def error_filter(xcptn):
     if isinstance(xcptn, subprocess.CalledProcessError):
         return xcptn.stderr
+    elif "cuCtxSynchronize" in str(xcptn):
+        return xcptn
     else:
         return None
 

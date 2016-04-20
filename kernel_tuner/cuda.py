@@ -27,7 +27,7 @@ class CudaFunctions(object):
         self.current_module = None
 
     def __del__(self):
-        self.context.pop()
+        self.context.detach()
 
 
     def create_gpu_args(self, arguments):
@@ -41,6 +41,12 @@ class CudaFunctions(object):
             else: # if not an array, just pass argument along
                 gpu_args.append(arg)
         return gpu_args
+
+    def cleanup_gpu_args(self, arguments):
+        for arg in arguments:
+            if isinstance(arg, drv.DeviceAllocation):
+                arg.free()
+
 
 
     def compile(self, kernel_name, kernel_string):
