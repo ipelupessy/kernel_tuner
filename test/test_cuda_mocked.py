@@ -1,6 +1,10 @@
 import numpy
 from nose.tools import nottest
-from mock import patch, Mock
+
+try:
+    from mock import patch, Mock
+except:
+    from unittest.mock import patch, Mock
 
 from .context import *
 
@@ -26,8 +30,8 @@ def test_create_gpu_args(drv):
     dev = cuda.CudaFunctions(0)
     gpu_args = dev.create_gpu_args(arguments)
 
-    print drv.mock_calls
-    print gpu_args
+    print(drv.mock_calls)
+    print(gpu_args)
 
     drv.mem_alloc.assert_called_once_with(20)
     drv.memcpy_htod.assert_called_once_with('mem_alloc', b)

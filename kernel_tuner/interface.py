@@ -118,6 +118,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import print_function
+
 import numpy
 import itertools
 import subprocess
@@ -289,7 +291,6 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     print("╭─(Running benchmarks...)")
     with SimpleDisplay(error_filter) as display:
         answer = run_logging(workflow, 1, display)
-
 
     results = dict(answer)
     #finished iterating over search space
