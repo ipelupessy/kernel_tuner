@@ -252,6 +252,8 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     #inspect device properties
     max_threads = dev.max_threads
 
+    dev = None
+
     #compute cartesian product of all tunable parameters
     parameter_space = list(itertools.product(*tune_params.values()))
 
@@ -300,7 +302,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     with SimpleDisplay(error_filter) as display:
         answer = run_logging(workflow, num_threads, display)
 
-    #answer = run_process(workflow, 8, my_registry)
+    #answer = run_process(workflow, num_threads, my_registry)
 
     #print("Answer: ", answer)
     answer = filter(None, answer)
@@ -318,10 +320,11 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 
 #module private functions
 def my_registry():
-    return serial.base() + serial.numpy()
+    return serial.pickle() + serial.base()
 
 @schedule_hint(display="│   Testing {instance_string} ... ",
-               confirm=True)
+               ignore_error=True,
+               confirm="took {return_value[1]} ms")
 def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid):
     dev = _get_device_interface(lang, device)
 

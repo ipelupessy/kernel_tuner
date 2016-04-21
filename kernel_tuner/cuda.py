@@ -27,7 +27,8 @@ class CudaFunctions(object):
         self.current_module = None
 
     def __del__(self):
-        self.context.detach()
+        if (self.context is not None):
+            self.context.detach()
 
 
     def create_gpu_args(self, arguments):
