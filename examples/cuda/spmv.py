@@ -30,6 +30,6 @@ grid_div_x = ["block_size_x/32"]
 
 tune_kernel("spmv_kernel", kernel_string,
     problem_size, args, tune_params,
-    grid_div_x=grid_div_x, verbose=True)
+    grid_div_x=grid_div_x, verbose=True, num_threads=16)
 
 

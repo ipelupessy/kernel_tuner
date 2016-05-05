@@ -130,7 +130,7 @@ import pycuda
 from collections import OrderedDict
 from noodles import schedule_hint, gather, run_logging, run_process, serial, Storable
 from noodles.display import SimpleDisplay
-
+from noodles.workflow import draw_workflow
 
 from kernel_tuner.cuda import CudaFunctions
 from kernel_tuner.opencl import OpenCLFunctions
@@ -298,6 +298,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 
     workflow = gather(*results)
 
+    draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
     print("╭─(Running benchmarks...)")
     with SimpleDisplay(error_filter) as display:
         answer = run_logging(workflow, num_threads, display)
@@ -305,8 +306,12 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     #answer = run_process(workflow, num_threads, my_registry)
 
     #print("Answer: ", answer)
+    if answer is None:
+        print("Tuning did not return any results, did an error occur?")
+        return None
+    
     answer = filter(None, answer)
-
+    
     results = dict(answer)
     #finished iterating over search space
     if len(results) > 0:
