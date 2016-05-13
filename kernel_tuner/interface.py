@@ -34,6 +34,7 @@ install using
 
 Dependencies
 ------------
+ * Python 2.7 or Python 3.5
  * PyCuda and/or PyOpenCL (https://mathema.tician.de/software/)
 
 Example usage
@@ -94,7 +95,7 @@ And for OpenCL:
     tune_kernel("vector_add", kernel_string, problem_size, args, tune_params)
 
 
-More extensive examples are available in the `examples` directory
+More extensive examples are available in the `examples` directory directory and in the full documentation.
 
 
 Author
@@ -135,9 +136,12 @@ from noodles.workflow import draw_workflow
 from kernel_tuner.cuda import CudaFunctions
 from kernel_tuner.opencl import OpenCLFunctions
 
+#temporary
+import pycuda.driver as drv
+
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         tune_params, device=0, grid_div_x=None, grid_div_y=None,
-        restrictions=None, verbose=False, lang=None, cmem_args=None, num_threads=1):
+        restrictions=None, verbose=False, lang=None, cmem_args=None, answer=None, num_threads=1):
     """ Tune a CUDA kernel given a set of tunable parameters
 
     :param kernel_name: The name of the kernel in the code
@@ -289,7 +293,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         name = kernel_name + "_" + instance_string
         kernel_string = kernel_string.replace(kernel_name, name)
 
-        time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid)
+        time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads, grid)
 
         #print the result
         #print(params, kernel_name, "took:", time, " ms.")
@@ -330,7 +334,7 @@ def my_registry():
 @schedule_hint(display="│   Testing {instance_string} ... ",
                ignore_error=True,
                confirm="took {return_value[1]} ms")
-def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, threads, grid):
+def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads, grid):
     dev = _get_device_interface(lang, device)
 
     # move data to GPU
@@ -358,6 +362,9 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
 
     # test kernel
     try:
+        if answer is not None:
+            _check_kernel_correctness(dev, func, gpu_args, threads, grid, answer, instance_string)
+            
         time = dev.benchmark(func, gpu_args, threads, grid)
     except Exception as e:
         # some launches may fail because too many registers are required
@@ -440,3 +447,25 @@ def _get_device_interface(lang, device):
         raise UnImplementedException("Sorry, support for languages other than CUDA and OpenCL is not implemented yet")
     return dev
 
+def _check_kernel_correctness(dev, func, gpu_args, threads, grid, answer, instance_string):
+    """runs the kernel once and checks the result against non-None values in answer"""
+    for result,expected in zip(gpu_args,answer):
+        if expected is not None:
+            dev.memset(result, 0, expected.size)
+    dev.run_kernel(func, gpu_args, threads, grid)
+    correct = True
+    for result,expected in zip(gpu_args,answer):
+        if expected is not None:
+            result_host = numpy.zeros_like(expected)
+            dev.memcpy_dtoh(result_host, result)
+            correct = correct and all(result_host.ravel()-expected.ravel() < 1e-6)
+
+            #from matplotlib import pyplot
+            #l = numpy.sqrt(result_host.size)
+            #result_host = result_host.reshape(l,l)
+            #f, (ax1, ax2) = pyplot.subplots(1, 2, sharex=True, sharey=True)
+            #ax1.imshow(result_host, cmap=pyplot.cm.bone)
+            #ax2.imshow(expected, cmap=pyplot.cm.bone)
+            #pyplot.show()
+    if not correct:
+        raise Exception("Error " + instance_string + " failed correctness check")
