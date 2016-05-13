@@ -33,8 +33,8 @@ cmem_args= {'d_filter': filter }
 
 args = [output, input, filter]
 tune_params = dict()
-tune_params["block_size_x"] = [16] #[16*i for i in range(1,9)]
-tune_params["block_size_y"] = [16] #[2**i for i in range(6)]
+tune_params["block_size_x"] = [16*i for i in range(1,9)]
+tune_params["block_size_y"] = [2**i for i in range(6)]
 
 tune_params["tile_size_x"] = [2**i for i in range(3)]
 tune_params["tile_size_y"] = [2**i for i in range(3)]
@@ -51,17 +51,17 @@ dev = CudaFunctions(device=0)
 gpu_args = dev.create_gpu_args(args)
 defs = "#define block_size_x 16 \n #define block_size_y 16 \n #define tile_size_x 1 \n #define tile_size_y 1 \n"
 func = dev.compile("convolution_naive", defs+ kernel_string)
-func(*gpu_args, block=(16,16,1), grid=(problem_size[0]/16, problem_size[1]/16))
+func(*gpu_args, block=(16,16,1), grid=(int(numpy.ceil(problem_size[0]/16)), int(numpy.ceil(problem_size[1]/16))))
 output_image = numpy.zeros_like(output)
 drv.memcpy_dtoh(output_image, gpu_args[0])
 output_image = output_image.reshape(problem_size)
 answer = [output_image, None, None]
 
+dev.cleanup_gpu_args(gpu_args)
+
 #pyplot.imshow(output_image, cmap=pyplot.cm.bone)
 #pyplot.show()
 
-
 kernel_tuner.tune_kernel("convolution_kernel", kernel_string,
     problem_size, args, tune_params,
-    grid_div_y=grid_div_y, grid_div_x=grid_div_x, verbose=True, cmem_args=cmem_args, answer=answer)
-
+    grid_div_y=grid_div_y, grid_div_x=grid_div_x, verbose=True, cmem_args=cmem_args, answer=answer, num_threads=4)

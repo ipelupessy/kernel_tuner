@@ -302,7 +302,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 
     workflow = gather(*results)
 
-    draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
+    #draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
     print("╭─(Running benchmarks...)")
     with SimpleDisplay(error_filter) as display:
         answer = run_logging(workflow, num_threads, display)
@@ -377,7 +377,7 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
             return None
         else:
             print("Error while benchmarking:", instance_string, file=sys.stderr)
-            raise e
+        raise e
     finally:
         dev.cleanup_gpu_args(gpu_args)
 
