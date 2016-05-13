@@ -136,9 +136,6 @@ from noodles.workflow import draw_workflow
 from kernel_tuner.cuda import CudaFunctions
 from kernel_tuner.opencl import OpenCLFunctions
 
-#temporary
-import pycuda.driver as drv
-
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         tune_params, device=0, grid_div_x=None, grid_div_y=None,
         restrictions=None, verbose=False, lang=None, cmem_args=None, answer=None, num_threads=1):
