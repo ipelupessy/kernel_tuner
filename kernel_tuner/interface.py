@@ -323,9 +323,10 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
             return None
     
         answer = filter(None, answer)
-        results = dict(answer)
     end_noodles = time.time()
 
+    results = dict(answer)
+    
     total_execution = round(start_iteration-end_noodles, 2)
     iteration_execution = round(start_iteration-end_iteration, 2)
     noodles_execution = round(end_iteration-end_noodles, 2)
