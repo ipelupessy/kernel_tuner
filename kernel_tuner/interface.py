@@ -125,6 +125,7 @@ import numpy
 import sys
 import itertools
 import subprocess
+import time
 
 import pycuda
 
@@ -138,7 +139,8 @@ from kernel_tuner.opencl import OpenCLFunctions
 
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         tune_params, device=0, grid_div_x=None, grid_div_y=None,
-        restrictions=None, verbose=False, lang=None, cmem_args=None, answer=None, num_threads=1):
+        restrictions=None, verbose=False, lang=None, cmem_args=None,
+        answer=None, num_threads=1, use_noodles=False):
     """ Tune a CUDA kernel given a set of tunable parameters
 
     :param kernel_name: The name of the kernel in the code
@@ -269,6 +271,8 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
                 print("skipping config", instance_string, "reason:", str(e))
             parameter_space.remove(element)
 
+
+    start_iteration = time.time()
     #iterate over parameter space
     for element in parameter_space:
         params = OrderedDict(zip(tune_params.keys(), element))
@@ -290,30 +294,48 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         name = kernel_name + "_" + instance_string
         kernel_string = kernel_string.replace(kernel_name, name)
 
-        time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads, grid)
+        if use_noodles:
+            kernel_time = _compile_and_run_noodles(lang, device, arguments, name, kernel_string, instance_string, verbose,
+                                            cmem_args, answer, threads, grid)
+        else:
+            kernel_time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args,
+                                    answer, threads, grid)
 
         #print the result
         #print(params, kernel_name, "took:", time, " ms.")
-        if time is not None:
-            results.append(time)
+        if kernel_time is not None:
+            results.append(kernel_time)
+    end_iteration = time.time()
 
-    workflow = gather(*results)
+    if use_noodles:
+        workflow = gather(*results)
 
-    #draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
-    print("╭─(Running benchmarks...)")
-    with SimpleDisplay(error_filter) as display:
-        answer = run_logging(workflow, num_threads, display)
+        #draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
+        print("╭─(Running benchmarks...)")
+        with SimpleDisplay(error_filter) as display:
+            answer = run_logging(workflow, num_threads, display)
 
-    #answer = run_process(workflow, num_threads, my_registry)
+        #answer = run_process(workflow, num_threads, my_registry)
 
-    #print("Answer: ", answer)
-    if answer is None:
-        print("Tuning did not return any results, did an error occur?")
-        return None
+        #print("Answer: ", answer)
+        if answer is None:
+            print("Tuning did not return any results, did an error occur?")
+            return None
     
-    answer = filter(None, answer)
-    
-    results = dict(answer)
+        answer = filter(None, answer)
+        results = dict(answer)
+    end_noodles = time.time()
+
+    total_execution = round(start_iteration-end_noodles, 2)
+    iteration_execution = round(start_iteration-end_iteration, 2)
+    noodles_execution = round(end_iteration-end_noodles, 2)
+    print("Calculation took: ", total_execution, " seconds.")
+    if use_noodles:
+        print("Noodles set up took: ", iteration_execution, " seconds.")
+        print("Noodles execution took: ", noodles_execution, " seconds.")
+    else:
+        print("Execution took: ", iteration_execution, " seconds.")
+
     #finished iterating over search space
     if len(results) > 0:
         best_config = min(results, key=results.get)
@@ -328,9 +350,16 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
 def my_registry():
     return serial.pickle() + serial.base()
 
+
 @schedule_hint(display="│   Testing {instance_string} ... ",
                ignore_error=True,
                confirm="took {return_value[1]} ms")
+def _compile_and_run_noodles(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer,
+                             threads, grid):
+    _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads,
+                     grid)
+
+
 def _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads, grid):
     dev = _get_device_interface(lang, device)
 

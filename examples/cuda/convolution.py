@@ -27,7 +27,9 @@ tune_params["tile_size_y"] = [2**i for i in range(3)]
 grid_div_x = ["block_size_x", "tile_size_x"]
 grid_div_y = ["block_size_y", "tile_size_y"]
 
-kernel_tuner.tune_kernel("convolution_kernel", kernel_string,
-    problem_size, args, tune_params,
-    grid_div_y=grid_div_y, grid_div_x=grid_div_x, verbose=True, cmem_args=cmem_args, answer=None, num_threads=8)
+kernel_tuner.tune_kernel("convolution_kernel", kernel_string, problem_size,
+                         args, tune_params, grid_div_y=grid_div_y,
+                         grid_div_x=grid_div_x, verbose=True,
+                         cmem_args=cmem_args, answer=None, num_threads=8,
+                         use_noodles=False)
 
