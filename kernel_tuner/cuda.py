@@ -10,7 +10,11 @@ except Exception as e:
     drv = object()
     SourceModule = object()
 
-
+class DriverException(drv.Error):
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
 
 class CudaFunctions(object):
     """Class that groups the CUDA functions on maintains state about the device"""
@@ -94,7 +98,7 @@ class CudaFunctions(object):
             return func
         except drv.CompileError as e:
             if "uses too much shared data" in e.stderr:
-                raise Exception("uses too much shared data")
+                raise DriverException("uses too much shared data")
             else:
                 raise e
 
@@ -142,7 +146,10 @@ class CudaFunctions(object):
         return numpy.mean(times[1:-1])
 
     def run_kernel(self, func, gpu_args, threads, grid):
-        func(*gpu_args, block=threads, grid=grid)
+        try:
+            func(*gpu_args, block=threads, grid=grid)
+        except Exception as e:
+            raise DriverException(e)
 
     def copy_constant_memory_args(self, cmem_args):
         """adds constant memory arguments to the most recently compiled module

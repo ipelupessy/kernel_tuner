@@ -130,11 +130,10 @@ import time
 import pycuda
 
 from collections import OrderedDict
-from noodles import schedule_hint, gather, run_logging, run_process, serial, Storable
-from noodles.display import SimpleDisplay
-from noodles.workflow import draw_workflow
+from noodles import schedule, schedule_hint, gather, run_logging, run_parallel, run_process, serial, Storable
+from noodles.display import NCDisplay
 
-from kernel_tuner.cuda import CudaFunctions
+from kernel_tuner.cuda import CudaFunctions, DriverException
 from kernel_tuner.opencl import OpenCLFunctions
 
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
@@ -246,10 +245,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     :rtype: dict( string, float )
     """
 
-    original_kernel = kernel_string
-    results = []
-
-    lang = _detect_language(lang, original_kernel)
+    lang = _detect_language(lang, kernel_string)
     dev = _get_device_interface(lang, device)
 
     #inspect device properties
@@ -258,24 +254,86 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     dev = None
 
     #compute cartesian product of all tunable parameters
-    parameter_space = list(itertools.product(*tune_params.values()))
-
-    #check for search space restrictions
-    for element in parameter_space[:]:
-        params = dict(zip(tune_params.keys(), element))
-        instance_string = "_".join([str(i) for i in params.values()])
-        try:
-            _check_restrictions(restrictions, params)
-        except Exception as e:
-            if verbose:
-                print("skipping config", instance_string, "reason:", str(e))
-            parameter_space.remove(element)
-
+    print("Tune Params:", tune_params)
+    parameter_sets = itertools.product(*tune_params.values())
+    parameter_space = filter(lambda p: _check_restrictions(restrictions, p, tune_params.keys(), verbose), parameter_sets)
 
     start_iteration = time.time()
     #iterate over parameter space
+    if use_noodles:
+        results = _parameter_sweep_noodles(lang, device, RefCopy(arguments), verbose, RefCopy(cmem_args), RefCopy(answer), tune_params, parameter_space, max_threads, problem_size, grid_div_y, grid_div_x, kernel_string, kernel_name)
+    else:
+        results = _parameter_sweep(lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space, max_threads, problem_size, grid_div_y, grid_div_x, kernel_string, kernel_name)
+    end_iteration = time.time()
+
+    if use_noodles:
+        workflow = results
+
+        print("Workflow: ", workflow)
+        if verbose:
+            print("╭─(Running benchmarks...)")
+            with NCDisplay(error_filter) as display:
+                answer = run_logging(workflow, num_threads, display)
+        else:
+            answer = run_parallel(workflow, num_threads)
+
+        if answer is None:
+            print("Tuning did not return any results, did an error occur?")
+            return None
+    
+        answer = filter(None, answer)
+        results = dict(answer)
+    else:
+        results = dict(results)
+
+    end_noodles = time.time()
+    
+    timing = {}
+    timing['total'] = round(end_noodles-start_iteration, 2)
+    timing['setup'] = round(end_iteration-start_iteration, 2)
+    timing['execution'] = round(end_noodles-end_iteration, 2)
+    print("Calculation took: ", timing['total'], " seconds.")
+    if use_noodles:
+        print("Noodles set up took: ", timing['setup'], " seconds.")
+        print("Noodles execution took: ", timing['execution'], " seconds.")
+    else:
+        timing['execution'] = timing['setup']
+        timing['setup'] = 0
+        print("Execution took: ", timing['execution'], " seconds.")
+
+    #finished iterating over search space
+    if len(results) > 0:
+        best_config = min(results, key=results.get)
+        print("best performing configuration: ", best_config, "took:", results[best_config], "ms.")
+    else:
+        print("no results to report")
+
+    
+    return (answer, best_config, timing)
+
+
+#module private functions
+class RefCopy:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def __deepcopy__(self, _):
+        return self.obj
+
+
+def my_registry():
+    return serial.pickle() + serial.base()
+
+
+@schedule_hint(display="│   Batching ... ",
+               ignore_error=True,
+               confirm=True,
+               annotated=True)
+def _parameter_sweep_noodles(lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space, max_threads, problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name):
+    results = []
     for element in parameter_space:
         params = OrderedDict(zip(tune_params.keys(), element))
+
         instance_string = "_".join([str(i) for i in params.values()])
 
         #compute thread block and grid dimensions for this kernel
@@ -294,70 +352,60 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         name = kernel_name + "_" + instance_string
         kernel_string = kernel_string.replace(kernel_name, name)
 
-        if use_noodles:
-            kernel_time = _compile_and_run_noodles(lang, device, arguments, name, kernel_string, instance_string, verbose,
-                                            cmem_args, answer, threads, grid)
-        else:
-            kernel_time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args,
-                                    answer, threads, grid)
-
+        kernel_time = _compile_and_run_noodles(lang, device, RefCopy(arguments), name, kernel_string, instance_string, verbose,
+                                RefCopy(cmem_args), RefCopy(answer), threads, RefCopy(grid))
         #print the result
-        #print(params, kernel_name, "took:", time, " ms.")
+        print("Kernel: ", name, " result: ", kernel_time)
+        if verbose:
+            print(name, "took:", kernel_time, " ms.")
+
         if kernel_time is not None:
             results.append(kernel_time)
-    end_iteration = time.time()
 
-    if use_noodles:
-        workflow = gather(*results)
-
-        #draw_workflow("kernel-tuner-callgraph", workflow, dot_format='svg')
-        print("╭─(Running benchmarks...)")
-        with SimpleDisplay(error_filter) as display:
-            answer = run_logging(workflow, num_threads, display)
-
-        #answer = run_process(workflow, num_threads, my_registry)
-
-        #print("Answer: ", answer)
-        if answer is None:
-            print("Tuning did not return any results, did an error occur?")
-            return None
-    
-        answer = filter(None, answer)
-    end_noodles = time.time()
-
-    results = dict(answer)
-    
-    total_execution = round(start_iteration-end_noodles, 2)
-    iteration_execution = round(start_iteration-end_iteration, 2)
-    noodles_execution = round(end_iteration-end_noodles, 2)
-    print("Calculation took: ", total_execution, " seconds.")
-    if use_noodles:
-        print("Noodles set up took: ", iteration_execution, " seconds.")
-        print("Noodles execution took: ", noodles_execution, " seconds.")
-    else:
-        print("Execution took: ", iteration_execution, " seconds.")
-
-    #finished iterating over search space
-    if len(results) > 0:
-        best_config = min(results, key=results.get)
-        print("best performing configuration: ", best_config, "took:", results[best_config], "ms.")
-    else:
-        print("no results to report")
-
-    return answer
+    return gather(*results)
 
 
-#module private functions
-def my_registry():
-    return serial.pickle() + serial.base()
+def _parameter_sweep(lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space, max_threads, problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name):
+    results = []
+    for element in parameter_space:
+        params = OrderedDict(zip(tune_params.keys(), element))
+
+        instance_string = "_".join([str(i) for i in params.values()])
+
+        #compute thread block and grid dimensions for this kernel
+        threads = _get_thread_block_dimensions(params)
+        if numpy.prod(threads) > max_threads:
+            if verbose:
+                print("skipping config", instance_string, "reason: too many threads per block")
+            continue
+        grid = _get_grid_dimensions(problem_size, params,
+                       grid_div_y, grid_div_x)
+
+        #create configuration specific kernel string
+        kernel_string = _prepare_kernel_string(original_kernel, params)
+
+        #rename the kernel to guarantee that PyCuda compiles a new kernel
+        name = kernel_name + "_" + instance_string
+        kernel_string = kernel_string.replace(kernel_name, name)
+
+        kernel_time = _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args,
+                                       answer, threads, grid)
+        #print the result
+        if verbose:
+            print(kernel_name, "took:", kernel_time, " ms.")
+
+        if kernel_time is not None:
+            results.append(kernel_time)
+    return results
 
 
 @schedule_hint(display="│   Testing {instance_string} ... ",
                ignore_error=True,
-               confirm="took {return_value[1]} ms")
+               confirm=True,
+               annotated=True)
 def _compile_and_run_noodles(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer,
                              threads, grid):
-    _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads,
+    return _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads,
                      grid)
 
 
@@ -367,7 +415,6 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
     # move data to GPU
     gpu_args = dev.create_gpu_args(arguments)
 
-
     # compile kernel func
     try:
         func = dev.compile(name, kernel_string)
@@ -376,12 +423,14 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
         # much shared memory for example, the desired behavior is to simply
         # skip over this configuration and try the next one
         dev.cleanup_gpu_args(gpu_args)
-        if "uses too much shared data" in str(e):
-            if verbose:
-                print("skipping config", instance_string, "reason: too much shared memory used", file=sys.stderr)
-            return None
-        else:
-            raise e
+        #if "uses too much shared data" in str(e):
+            #if verbose:
+            #    print("skipping config", instance_string, "reason: too much shared memory used", file=sys.stderr)
+            #return None
+            
+        #else:
+        #raise e
+        return None, str(e)
 
     # add constant memory arguments to compiled module
     if cmem_args is not None:
@@ -392,28 +441,31 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
         if answer is not None:
             _check_kernel_correctness(dev, func, gpu_args, threads, grid, answer, instance_string)
             
-        time = dev.benchmark(func, gpu_args, threads, grid)
+        kernel_time = dev.benchmark(func, gpu_args, threads, grid)
     except Exception as e:
         # some launches may fail because too many registers are required
         # to run the kernel given the current thread block size
         # the desired behavior is to simply skip over this configuration
         # and proceed to try the next one
-        if "too many resources requested for launch" in str(e):
-            if verbose:
-                print("skipping config", instance_string, "reason: too many resources requested for launch", file=sys.stderr)
-            return None
-        else:
-            print("Error while benchmarking:", instance_string, file=sys.stderr)
-        raise e
+        #if "too many resources requested for launch" in str(e):
+        #    if verbose:
+        #        print("skipping config", instance_string, "reason: too many resources requested for launch", file=sys.stderr)
+        #    return None
+        #else:
+        #    print("Error while benchmarking:", instance_string, file=sys.stderr)
+        #raise e
+        return None, str(e)
     finally:
         dev.cleanup_gpu_args(gpu_args)
 
-    return instance_string, time
+    return (instance_string, kernel_time), None
 
 
 def error_filter(xcptn):
     if isinstance(xcptn, subprocess.CalledProcessError):
         return xcptn.stderr
+    elif isinstance(xcptn, DriverException):
+        return xcptn
     elif "cuCtxSynchronize" in str(xcptn):
         return xcptn
     else:
@@ -459,11 +511,17 @@ def _prepare_kernel_string(original_kernel, params):
         kernel_string = kernel_string.replace(k, str(v))
     return kernel_string
 
-def _check_restrictions(restrictions, params):
+def _check_restrictions(restrictions, tune_params, keys, verbose):
+    params = dict(zip(keys, tune_params))
+
     if restrictions != None:
         for restrict in restrictions:
             if not eval(_prepare_kernel_string(restrict, params)):
-                raise Exception("config fails restriction")
+                if verbose:
+                    instance_string = "_".join([str(i) for i in params.values()])
+                    print("skipping config", instance_string, "reason:", str(e))
+                return False
+    return True
 
 def _get_device_interface(lang, device):
     if lang == "CUDA":
