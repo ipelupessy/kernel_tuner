@@ -132,6 +132,7 @@ import pycuda
 from collections import OrderedDict
 from noodles import schedule, schedule_hint, gather, run_logging, run_parallel, run_process, serial, Storable
 from noodles.display import NCDisplay
+from noodles.interface import AnnotatedValue
 
 from kernel_tuner.cuda import CudaFunctions, DriverException
 from kernel_tuner.opencl import OpenCLFunctions
@@ -139,7 +140,7 @@ from kernel_tuner.opencl import OpenCLFunctions
 def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         tune_params, device=0, grid_div_x=None, grid_div_y=None,
         restrictions=None, verbose=False, lang=None, cmem_args=None,
-        answer=None, num_threads=1, use_noodles=False):
+        answer=None, num_threads=1, use_noodles=False, queue=None):
     """ Tune a CUDA kernel given a set of tunable parameters
 
     :param kernel_name: The name of the kernel in the code
@@ -246,6 +247,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     """
 
     lang = _detect_language(lang, kernel_string)
+    print("Language: ", lang)
     dev = _get_device_interface(lang, device)
 
     #inspect device properties
@@ -308,7 +310,8 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
     else:
         print("no results to report")
 
-    
+    if (queue is not None):
+        queue.put((answer, best_config, timing))
     return (answer, best_config, timing)
 
 
@@ -327,8 +330,7 @@ def my_registry():
 
 @schedule_hint(display="│   Batching ... ",
                ignore_error=True,
-               confirm=True,
-               annotated=True)
+               confirm=True)
 def _parameter_sweep_noodles(lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space, max_threads, problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name):
     results = []
     for element in parameter_space:
@@ -354,10 +356,11 @@ def _parameter_sweep_noodles(lang, device, arguments, verbose, cmem_args, answer
 
         kernel_time = _compile_and_run_noodles(lang, device, RefCopy(arguments), name, kernel_string, instance_string, verbose,
                                 RefCopy(cmem_args), RefCopy(answer), threads, RefCopy(grid))
+    
         #print the result
-        print("Kernel: ", name, " result: ", kernel_time)
-        if verbose:
-            print(name, "took:", kernel_time, " ms.")
+        #print("Kernel: ", name, " result: ", kernel_time)
+        #if verbose:
+        #    print(name, "took:", kernel_time, " ms.")
 
         if kernel_time is not None:
             results.append(kernel_time)
@@ -401,8 +404,7 @@ def _parameter_sweep(lang, device, arguments, verbose, cmem_args, answer, tune_p
 
 @schedule_hint(display="│   Testing {instance_string} ... ",
                ignore_error=True,
-               confirm=True,
-               annotated=True)
+               confirm=True)
 def _compile_and_run_noodles(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer,
                              threads, grid):
     return _compile_and_run(lang, device, arguments, name, kernel_string, instance_string, verbose, cmem_args, answer, threads,
@@ -430,7 +432,7 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
             
         #else:
         #raise e
-        return None, str(e)
+        return AnnotatedValue(None, str(e))
 
     # add constant memory arguments to compiled module
     if cmem_args is not None:
@@ -454,11 +456,11 @@ def _compile_and_run(lang, device, arguments, name, kernel_string, instance_stri
         #else:
         #    print("Error while benchmarking:", instance_string, file=sys.stderr)
         #raise e
-        return None, str(e)
+        return AnnotatedValue(None, str(e))
     finally:
         dev.cleanup_gpu_args(gpu_args)
 
-    return (instance_string, kernel_time), None
+    return AnnotatedValue((instance_string, kernel_time), None)
 
 
 def error_filter(xcptn):

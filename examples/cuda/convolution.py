@@ -1,9 +1,11 @@
 #!/usr/bin/env python
+from __future__ import print_function                                                                                                                                       
+
 import numpy as np
 import kernel_tuner
 import gc
 from collections import OrderedDict
-
+import multiprocessing as mp
 
 def initialize():
     with open('convolution.cu', 'r') as f:
@@ -17,9 +19,6 @@ def initialize():
     input_matrix = np.random.randn(input_size).astype(np.float32)
     filter_matrix = np.random.randn(17*17).astype(np.float32)
 
-    print("Input size: ", input_size)
-    print("Filter size: ", 17*17)
-
     cmem_args = {'d_filter': np.random.randn(17*17).astype(np.float32)}
 
     args = [output, input_matrix, filter_matrix]
@@ -28,6 +27,8 @@ def initialize():
 
 
 def main():
+    mp.set_start_method('spawn')
+    
     ranges = ((1, 9), (0, 6), (0, 3), (0, 3))
 
     kernel_string, problem_size, cmem_args, args = initialize()
@@ -48,17 +49,18 @@ def main():
         print("#", str(tune_params), file=log_mean.file, flush=True)
         # Run without noodles
 
-        print("Normal")
+        print("Without Noodles")
         total, execution, speedup = run_without_noodles(kernel_string, problem_size, args, tune_params, grid_div_y,
                                                         grid_div_x, cmem_args, verbose=False, use_predefined=True)
 
         mean_total_without = np.mean(total)
         mean_execution_without = np.mean(execution)
         log_mean("without", 1, mean_total_without, 0, mean_execution_without, 1, 1)
+        print("Done")
 
         print("With noodles")
         # Run with noodles with different number of threads
-        for num_threads in range(8, 9):
+        for num_threads in range(12, 17):
             total_with, setup_with, execution_with, speedup_with = run_with_noodles(kernel_string, problem_size, args,
                                                                                     tune_params, grid_div_y, grid_div_x,
                                                                                     cmem_args, mean_total_without,
@@ -70,6 +72,7 @@ def main():
             mean_speedup = mean_total_without / mean_total_with
             log_mean(num_threads, num_threads, mean_total_with, mean_setup_with, mean_execution_with, mean_speedup_with,
                      mean_speedup)
+        print("Done")
 
 
 def run_without_noodles(kernel_string, problem_size, args, tune_params, grid_div_y, grid_div_x, cmem_args,
@@ -89,7 +92,7 @@ def run_without_noodles(kernel_string, problem_size, args, tune_params, grid_div
                                                             grid_div_y=grid_div_y, grid_div_x=grid_div_x,
                                                             verbose=verbose, cmem_args=cmem_args, answer=None,
                                                             num_threads=1, use_noodles=False)
-            gc.collect()
+            
             total_single = timing['total']
             execution_single = timing['execution']
             speedup_single = total_single / timing['total']  # this should be 1 always
@@ -111,12 +114,27 @@ def run_with_noodles(kernel_string, problem_size, args, tune_params, grid_div_y,
         speedup_with = []
 
         for i in range(0, 30):
-            answer, best, timing = kernel_tuner.tune_kernel("convolution_kernel",
-                                                            kernel_string, problem_size, args, tune_params,
-                                                            grid_div_y=grid_div_y, grid_div_x=grid_div_x,
-                                                            verbose=verbose, cmem_args=cmem_args, answer=None,
-                                                            num_threads=num_threads, use_noodles=True)
-            gc.collect()
+            #answer, best, timing = kernel_tuner.tune_kernel("convolution_kernel",
+            #                                                kernel_string, problem_size, args, tune_params,
+            #                                                grid_div_y=grid_div_y, grid_div_x=grid_div_x,
+            #                                                verbose=verbose, cmem_args=cmem_args, answer=None,
+            #                                                num_threads=num_threads, use_noodles=True)
+
+            q = mp.Queue();
+            kwargs = {
+                'grid_div_y': grid_div_y,
+                'grid_div_x': grid_div_x,
+                'verbose': verbose,
+                'cmem_args': cmem_args,
+                'answer': None,
+                'num_threads': num_threads,
+                'use_noodles': True,
+                'queue': q
+            }
+            p = mp.Process(target=kernel_tuner.tune_kernel, args=("convolution_kernel",kernel_string, problem_size, args, tune_params), kwargs=kwargs)
+            p.start()
+            answer, best, timing = q.get()
+            p.join()
 
             total_with.append(timing['total'])
             setup_with.append(timing['setup'])
@@ -125,7 +143,7 @@ def run_with_noodles(kernel_string, problem_size, args, tune_params, grid_div_y,
             speedup = mean_total_without / timing['total']
             speedup_with.append(speedup)
 
-            log("noodles_"+num_threads, num_threads, i, timing['total'], timing['setup'], timing['execution'], speedup)
+            log("noodles_"+str(num_threads), num_threads, i, timing['total'], timing['setup'], timing['execution'], speedup)
 
         return total_with, setup_with, execution_with, speedup_with
 
