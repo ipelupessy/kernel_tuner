@@ -145,7 +145,7 @@ def compile_and_benchmark(dev, gpu_args, kernel_name, original_kernel, params,
 
     except Exception as e:
         _, kernel_string = setup_kernel_strings(kernel_name, kernel_string, params, grid, instance_string)
-        print("Error while compiling or benchmarking the following code:\n" + kernel_string + "\n")
+        #print("Error while compiling or benchmarking the following code:\n" + kernel_string + "\n")
         raise e
 
     #clean up any temporary files

@@ -1,14 +1,17 @@
 #module private functions
+import sys
 import subprocess
+import pprint
 
 from collections import OrderedDict
 
-from noodles import schedule, schedule_hint, has_scheduled_methods, gather, run_logging, run_parallel, run_process, serial, Storable
-from noodles.run.runners import run_parallel_timing
+from noodles import *
+from noodles.run.runners import *
 from noodles.display import NCDisplay
 from noodles.interface import AnnotatedValue
 
-from kernel_tuner.util import detect_language, get_device_interface, compile_and_benchmark
+from kernel_tuner.util import *
+from kernel_tuner.core import *
 
 class RefCopy:
         def __init__(self, obj):
@@ -22,7 +25,7 @@ class NoodlesRunner:
     def run(self, kernel_name, original_kernel, problem_size, arguments,
             tune_params, parameter_space, grid_div_x, grid_div_y,
             answer, atol, verbose,
-            lang, device, platform, cmem_args):
+            lang, device, platform, cmem_args, compiler_options=None):
         """ Iterate through the entire parameter space using a multiple Python processes
 
         :param kernel_name: The name of the kernel in the code.
@@ -79,23 +82,26 @@ class NoodlesRunner:
         """
         workflow = self._parameter_sweep(lang, device, arguments, verbose, RefCopy(cmem_args), RefCopy(answer), 
                                     RefCopy(tune_params), RefCopy(parameter_space), problem_size,
-                                    grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform)
+                                    grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform, compiler_options)
 
-        if verbose:
-            with NCDisplay(self.error_filter) as display:
-                answer = run_logging(workflow, self.max_threads, display)
+ #       if verbose:
+#        with NCDisplay(self.error_filter) as display:
+           #answer = run_parallel_with_display(workflow, self.max_threads, display)
+        answer = run_single(workflow)
             #answer = run_parallel(workflow, self.max_threads)
-        else:
-            myId = uuid.uuid4().hex
-            answer = run_parallel_timing(workflow, self.max_threads, "noodles"+myId+".json")
+#        else:
+            #myId = uuid.uuid4().hex
+            #answer = run_parallel_timing(workflow, self.max_threads, "noodles"+myId+".json")
+            #answer = run_process(workflow, self.max_threads, self.my_registry)
+#            answer = run_parallel(workflow, self.max_threads)
 
         if answer is None:
             print("Tuning did not return any results, did an error occur?")
             return None
 
-        print(answer)
-        answer = filter(None, answer)
-        return dict(answer)
+        pp = pprint.PrettyPrinter(indent=4)
+        pp.pprint(answer)
+        return answer
 
 
     def __init__(self, max_threads=1):
@@ -129,19 +135,20 @@ class NoodlesRunner:
                 ignore_error=True,
                 confirm=True)
     def _parameter_sweep(self, lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space,
-                         problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform):
+                         problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform, compiler_options):
         results = []
         for element in parameter_space:
-            params = OrderedDict(zip(tune_params.keys(), element))
+            params = dict(OrderedDict(zip(tune_params.keys(), element)))
 
             instance_string = "_".join([str(i) for i in params.values()])
 
             time = self.run_single(lang, device, kernel_name, original_kernel, params,
                             problem_size, grid_div_y, grid_div_x,
-                            cmem_args, answer, atol, instance_string, verbose, platform, arguments)
+                            cmem_args, answer, atol, instance_string, verbose, platform, arguments, compiler_options)
 
-            if time is not None:
-                results.append(time)
+            if time[0] is not None:
+                params['time'] = time[0]
+                results.append(lift(params))
 
         return gather(*results)
 
@@ -149,10 +156,10 @@ class NoodlesRunner:
     @schedule_hint(display="Testing {instance_string} ... ",
                 ignore_error=True,
                 confirm=True)
-    def run_single(self, lang, device, kernel_name, original_kernel, params, problem_size, grid_div_y, grid_div_x, cmem_args, answer, atol, instance_string, verbose, platform, arguments):
+    def run_single(self, lang, device, kernel_name, original_kernel, params, problem_size, grid_div_y, grid_div_x, cmem_args, answer, atol, instance_string, verbose, platform, arguments, compiler_options):
         #detect language and create device function interface
         lang = detect_language(lang, original_kernel)
-        dev = get_device_interface(lang, device, platform)
+        dev = get_device_interface(lang, device, platform, compiler_options)
 
         #move data to the GPU
         gpu_args = dev.ready_argument_list(arguments)
@@ -162,6 +169,7 @@ class NoodlesRunner:
                 result = (instance_string, time)
                 return AnnotatedValue(result, None)
             else:
-                return None
+                return AnnotatedValue(-1, None)
         except Exception as e:
             return AnnotatedValue(None, str(e))
+
