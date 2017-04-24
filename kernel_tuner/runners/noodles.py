@@ -5,8 +5,8 @@ import pprint
 
 from collections import OrderedDict
 
-from noodles import *
-from noodles.run.runners import *
+from noodles import schedule_hint, gather, lift
+from noodles.run.runners import run_parallel_with_display, run_parallel
 from noodles.display import NCDisplay
 from noodles.interface import AnnotatedValue
 
@@ -80,29 +80,28 @@ class NoodlesRunner:
             execution times.
         :rtype: dict( string, float )
         """
-        workflow = self._parameter_sweep(lang, device, arguments, verbose, RefCopy(cmem_args), RefCopy(answer),
-                                    RefCopy(tune_params), RefCopy(parameter_space), problem_size,
-                                    grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform, compiler_options)
+        workflow = self._parameter_sweep(lang, device, arguments, verbose,
+                                         RefCopy(cmem_args), RefCopy(answer),
+                                         RefCopy(tune_params),
+                                         RefCopy(parameter_space),
+                                         problem_size, grid_div_y, grid_div_x,
+                                         original_kernel, kernel_name, atol,
+                                         platform, compiler_options)
 
- #       if verbose:
-        with NCDisplay(self.error_filter) as display:
-           answer = run_parallel_with_display(workflow, self.max_threads, display)
-        #answer = run_single(workflow)
-            #answer = run_parallel(workflow, self.max_threads)
-#        else:
-            #myId = uuid.uuid4().hex
-            #answer = run_parallel_timing(workflow, self.max_threads, "noodles"+myId+".json")
-            #answer = run_process(workflow, self.max_threads, self.my_registry)
-#            answer = run_parallel(workflow, self.max_threads)
+        if verbose:
+            with NCDisplay(self.error_filter) as display:
+                answer = run_parallel_with_display(workflow, self.max_threads, display)
+        else:
+            answer = run_parallel(workflow, self.max_threads)
 
         if answer is None:
             print("Tuning did not return any results, did an error occur?")
             return None
 
-        pp = pprint.PrettyPrinter(indent=4)
-        pp.pprint(answer)
-        return answer
+        # Filter out null times
+        answer = [d for d in answer if d['time']]
 
+        return answer
 
     def __init__(self, max_threads=1):
         self._max_threads = max_threads
@@ -126,16 +125,18 @@ class NoodlesRunner:
         if type is subprocess.CalledProcessError:
             return value.stderr
         elif "cuCtxSynchronize" in str(value):
-            return xcptn
+            return value
         else:
             return None
 
 
     @schedule_hint(display="Batching ... ",
-                ignore_error=True,
-                confirm=True)
-    def _parameter_sweep(self, lang, device, arguments, verbose, cmem_args, answer, tune_params, parameter_space,
-                         problem_size, grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform, compiler_options):
+                   ignore_error=True,
+                   confirm=True)
+    def _parameter_sweep(self, lang, device, arguments, verbose, cmem_args,
+                         answer, tune_params, parameter_space, problem_size,
+                         grid_div_y, grid_div_x, original_kernel, kernel_name,
+                         atol, platform, compiler_options):
         results = []
         for element in parameter_space:
             params = dict(OrderedDict(zip(tune_params.keys(), element)))
@@ -143,22 +144,23 @@ class NoodlesRunner:
             instance_string = get_instance_string(params)
 
             time = self.run_single(lang, device, kernel_name, original_kernel, params,
-                            problem_size, grid_div_y, grid_div_x,
-                            cmem_args, answer, atol, instance_string, verbose, platform, arguments, compiler_options)
+                                   problem_size, grid_div_y, grid_div_x,
+                                   cmem_args, answer, atol, instance_string, verbose,
+                                   platform, arguments, compiler_options)
 
-            #if time[0] is not None:
-            #    params['time'] = time[0]
-            #    results.append(lift(params))
-            if time[0] is not None:
-                results.append(time)  #should this be lifted or not?
+            params['time'] = time
+            results.append(lift(params))
 
         return gather(*results)
 
 
     @schedule_hint(display="Testing {instance_string} ... ",
-                ignore_error=True,
-                confirm=True)
-    def run_single(self, lang, device, kernel_name, original_kernel, params, problem_size, grid_div_y, grid_div_x, cmem_args, answer, atol, instance_string, verbose, platform, arguments, compiler_options):
+                   ignore_error=True,
+                   confirm=True)
+    def run_single(self, lang, device, kernel_name, original_kernel, params,
+                   problem_size, grid_div_y, grid_div_x, cmem_args, answer,
+                   atol, instance_string, verbose, platform, arguments,
+                   compiler_options):
         #detect language and create device function interface
         lang = detect_language(lang, original_kernel)
         dev = get_device_interface(lang, device, platform, compiler_options)
@@ -166,12 +168,10 @@ class NoodlesRunner:
         #move data to the GPU
         gpu_args = dev.ready_argument_list(arguments)
         try:
-            time = compile_and_benchmark(dev, gpu_args, kernel_name, original_kernel, params, problem_size, grid_div_y, grid_div_x, cmem_args, answer, atol, instance_string, False)
-            if time is not None:
-                result = (instance_string, time)
-                return AnnotatedValue(result, None)
-            else:
-                return AnnotatedValue(-1, None)
+            time = compile_and_benchmark(dev, gpu_args, kernel_name,
+                                         original_kernel, params, problem_size,
+                                         grid_div_y, grid_div_x, cmem_args,
+                                         answer, atol, instance_string, False)
+            return AnnotatedValue(time, None)
         except Exception as e:
             return AnnotatedValue(None, str(e))
-
