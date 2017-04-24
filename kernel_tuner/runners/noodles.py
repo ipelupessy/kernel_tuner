@@ -80,14 +80,14 @@ class NoodlesRunner:
             execution times.
         :rtype: dict( string, float )
         """
-        workflow = self._parameter_sweep(lang, device, arguments, verbose, RefCopy(cmem_args), RefCopy(answer), 
+        workflow = self._parameter_sweep(lang, device, arguments, verbose, RefCopy(cmem_args), RefCopy(answer),
                                     RefCopy(tune_params), RefCopy(parameter_space), problem_size,
                                     grid_div_y, grid_div_x, original_kernel, kernel_name, atol, platform, compiler_options)
 
  #       if verbose:
-#        with NCDisplay(self.error_filter) as display:
-           #answer = run_parallel_with_display(workflow, self.max_threads, display)
-        answer = run_single(workflow)
+        with NCDisplay(self.error_filter) as display:
+           answer = run_parallel_with_display(workflow, self.max_threads, display)
+        #answer = run_single(workflow)
             #answer = run_parallel(workflow, self.max_threads)
 #        else:
             #myId = uuid.uuid4().hex
@@ -140,15 +140,17 @@ class NoodlesRunner:
         for element in parameter_space:
             params = dict(OrderedDict(zip(tune_params.keys(), element)))
 
-            instance_string = "_".join([str(i) for i in params.values()])
+            instance_string = get_instance_string(params)
 
             time = self.run_single(lang, device, kernel_name, original_kernel, params,
                             problem_size, grid_div_y, grid_div_x,
                             cmem_args, answer, atol, instance_string, verbose, platform, arguments, compiler_options)
 
+            #if time[0] is not None:
+            #    params['time'] = time[0]
+            #    results.append(lift(params))
             if time[0] is not None:
-                params['time'] = time[0]
-                results.append(lift(params))
+                results.append(time)  #should this be lifted or not?
 
         return gather(*results)
 
