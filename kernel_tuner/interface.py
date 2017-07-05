@@ -26,7 +26,7 @@ limitations under the License.
 from __future__ import print_function
 
 from collections import OrderedDict
-import importlib
+from importlib import util as importlibutil
 from datetime import datetime
 import logging
 import sys
@@ -158,10 +158,13 @@ _tuning_options = Options([
         default. To enable sampling, pass a value between 0 and 1.""", "float")),
     ("use_noodles", ("""Use Noodles workflow engine to tune in parallel using
         multiple threads, False by Default.
+        Accepted values:
+            * thread
+            * process
         Requires Noodles to be installed, use 'pip install noodles'.
         Note that Noodles requires Python 3.5 or newer.
         You can configure the number of threads to use with the option
-        num_threads.""", "boolean")),
+        num_threads.""", "string")),
     ("num_threads", ("""The number of threads to use when using the Noodles
         workflow engine for tuning using multiple threads, 1 by default.
         Requires Noodles, see 'use_noodles' option.""", "int")),
@@ -256,7 +259,7 @@ def tune_kernel(kernel_name, kernel_string, problem_size, arguments,
         if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 5):
             raise ValueError("Using multiple threads requires Noodles, Noodles requires Python 3.5 or higher")
         #check if noodles is installed in a way that works with Python 3.4 or newer
-        noodles_installed = importlib.util.find_spec("noodles") is not None
+        noodles_installed = importlibutil.find_spec("noodles") is not None
         if not noodles_installed:
             raise ValueError("Using multiple threads requires Noodles, please use 'pip install noodles'")
         #import the NoodlesRunner

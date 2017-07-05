@@ -6,17 +6,16 @@ import numpy
 
 from noodles import schedule_hint, gather, lift
 from noodles.run.runners import run_parallel_with_display, run_parallel
+from noodles.run.process import run_process
 from noodles.display import NCDisplay
 from noodles.interface import AnnotatedValue
+from noodles import serial
+from noodles.serial.numpy import arrays_to_hdf5
 
 from kernel_tuner.core import DeviceInterface
 
-class RefCopy:
-    def __init__(self, obj):
-        self.obj = obj
-
-    def __deepcopy__(self, _):
-        return self.obj
+def serializer_registry():
+    return serial.base() + arrays_to_hdf5()
 
 def _error_filter(errortype, value=None, tb=None):
     if errortype is subprocess.CalledProcessError:
@@ -56,13 +55,17 @@ class NoodlesRunner:
         :rtype: list(dict()), dict()
 
         """
-        workflow = self._parameter_sweep(parameter_space, kernel_options, self.device_options,
-                                         tuning_options)
-        if tuning_options.verbose:
-            with NCDisplay(_error_filter) as display:
-                answer = run_parallel_with_display(workflow, self.max_threads, display)
-        else:
-            answer = run_parallel(workflow, self.max_threads)
+        parameter_space = list(parameter_space)
+        workflow = _parameter_sweep(parameter_space, kernel_options, self.device_options,
+                                         tuning_options, self.max_threads)
+        if tuning_options.use_noodles == "thread":
+            if tuning_options.verbose:
+                with NCDisplay(_error_filter) as display:
+                    answer = run_parallel_with_display(workflow, self.max_threads, display)
+            else:
+                answer = run_parallel(workflow, self.max_threads)
+        elif tuning_options.use_noodles == "process":
+            answer = run_process(workflow, self.max_threads, serializer_registry)
 
         if answer is None:
             print("Tuning did not return any results, did an error occur?")
@@ -79,53 +82,52 @@ class NoodlesRunner:
         return result, {}
 
 
-    @schedule_hint(display="Batching ... ",
-                   ignore_error=True,
-                   confirm=True)
-    def _parameter_sweep(self, parameter_space, kernel_options, device_options, tuning_options):
-        """Build a Noodles workflow by sweeping the parameter space"""
-        results = []
+@schedule_hint(display="Batching ... ",
+               ignore_error=True,
+               confirm=True)
+def _parameter_sweep(parameter_space, kernel_options, device_options, tuning_options, max_threads):
+    """Build a Noodles workflow by sweeping the parameter space"""
+    results = []
 
-        #randomize parameter space to do pseudo load balancing
-        parameter_space = list(parameter_space)
-        random.shuffle(parameter_space)
+    #randomize parameter space to do pseudo load balancing
+    random.shuffle(parameter_space)
 
-        #split parameter space into chunks
-        work_per_thread = int(numpy.ceil(len(parameter_space) / float(self.max_threads)))
-        chunks = _chunk_list(parameter_space, work_per_thread)
+    #split parameter space into chunks
+    work_per_thread = int(numpy.ceil(len(parameter_space) / float(max_threads)))
+    chunks = _chunk_list(parameter_space, work_per_thread)
 
-        for chunk in chunks:
+    for chunk in chunks:
 
-            chunked_result = self._run_chunk(chunk, kernel_options, device_options, tuning_options)
+        chunked_result = _run_chunk(chunk, kernel_options, device_options, tuning_options)
 
-            results.append(lift(chunked_result))
+        results.append(lift(chunked_result))
 
-        return gather(*results)
+    return gather(*results)
 
 
-    @schedule_hint(ignore_error=True,
-                   confirm=True)
-    def _run_chunk(self, chunk, kernel_options, device_options, tuning_options):
-        """Benchmark a single kernel instance in the parameter space"""
+@schedule_hint(ignore_error=True,
+               confirm=True)
+def _run_chunk(chunk, kernel_options, device_options, tuning_options):
+    """Benchmark a single kernel instance in the parameter space"""
 
-        #detect language and create high-level device interface
-        dev = DeviceInterface(kernel_options.kernel_string, iterations=tuning_options.iterations, **device_options)
+    #detect language and create high-level device interface
+    dev = DeviceInterface(kernel_options.kernel_string, iterations=tuning_options.iterations, **device_options)
 
-        #move data to the GPU
-        gpu_args = dev.ready_argument_list(kernel_options.arguments)
+    #move data to the GPU
+    gpu_args = dev.ready_argument_list(kernel_options.arguments)
 
-        results = []
+    results = []
 
-        for element in chunk:
-            params = dict(OrderedDict(zip(tuning_options.tune_params.keys(), element)))
+    for element in chunk:
+        params = dict(OrderedDict(zip(tuning_options.tune_params.keys(), element)))
 
-            try:
-                time = dev.compile_and_benchmark(gpu_args, params, kernel_options, tuning_options)
+        try:
+            time = dev.compile_and_benchmark(gpu_args, params, kernel_options, tuning_options)
 
-                params['time'] = AnnotatedValue(time, None)
-                results.append(params)
-            except Exception as e:
-                params['time'] = AnnotatedValue(None, str(e))
-                results.append(params)
+            params['time'] = AnnotatedValue(time, None)
+            results.append(params)
+        except Exception as e:
+            params['time'] = AnnotatedValue(None, str(e))
+            results.append(params)
 
-        return results
+    return results
